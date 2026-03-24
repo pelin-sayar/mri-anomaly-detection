@@ -1,0 +1,18 @@
+# --- Core Deep Learning ---
+torch
+torchvision
+torchaudio
+
+# --- Medical Imaging & Data ---
+nibabel             # Handling .nii.gz files
+numpy               # Array operations
+tqdm                # Progress bars
+
+# --- Vision & Processing ---
+opencv-python       # Image processing
+albumentations      # Data augmentation
+scikit-learn        # Evaluation metrics (Dice, IoU)
+scipy               # Spatial calculations
+
+# --- Visualization ---
+matplotlib          # Plotting loss and masks

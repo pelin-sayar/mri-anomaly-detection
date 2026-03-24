@@ -1,0 +1,15 @@
+# Data
+data/raw/
+data/processed/
+*.nii.gz
+*.npy
+
+# Model Checkpoints
+*.pth.tar
+*.pth
+
+# Python/IDE
+__pycache__/
+.ipynb_checkpoints/
+.venv/
+.DS_Store
