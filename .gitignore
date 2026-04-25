@@ -13,3 +13,12 @@ __pycache__/
 .ipynb_checkpoints/
 .venv/
 .DS_Store
+
+# Environments
+cardiac_env/
+venv/
+.env
+
+# Python bytecode
+__pycache__/
+*.py[cod]

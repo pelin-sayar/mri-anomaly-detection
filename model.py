@@ -18,7 +18,7 @@ class DoubleConv(nn.Module):
         return self.conv(x)
 
 class UNetWithOOD(nn.Module):
-    def __init__(self, in_channels=1, out_channels=3, features=[64, 128, 256, 512]):
+    def __init__(self, in_channels=1, out_channels=1, features=[64, 128, 256, 512]):
         super(UNetWithOOD, self).__init__()
         self.downs = nn.ModuleList()
         self.ups = nn.ModuleList()
@@ -49,7 +49,7 @@ class UNetWithOOD(nn.Module):
         )
 
 
-    def forward(self, x):
+    def forward(self, x, return_features=False):
         skip_connections = []
 
         for down in self.downs:
@@ -72,4 +72,6 @@ class UNetWithOOD(nn.Module):
 
         seg_out = self.final_conv(x)
         ood_flag = self.ood_head(x)  # shape: (B, 1)
+        if return_features:
+            return seg_out, ood_flag, x
         return seg_out, ood_flag

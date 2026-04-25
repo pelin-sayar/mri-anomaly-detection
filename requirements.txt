@@ -16,3 +16,4 @@ scipy               # Spatial calculations
 
 # --- Visualization ---
 matplotlib          # Plotting loss and masks
+scikit-image        # Marching cubes for 3D mesh visualization

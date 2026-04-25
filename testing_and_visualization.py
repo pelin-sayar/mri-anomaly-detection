@@ -5,7 +5,6 @@ import numpy as np
 import random
 import csv
 import os
-from scipy.ndimage import center_of_mass
 from model import UNetWithOOD
 from dataset import CoronaryArteryDataset
 
@@ -16,27 +15,23 @@ LOG_FILE = "midterm_results_log.csv"
 def calculate_dice(preds, targets):
     preds_flat = preds.flatten()
     targets_flat = targets.flatten()
-    intersection = np.sum(preds_flat[targets_flat > 0] > 0)
-    return (2. * intersection) / (np.sum(preds_flat > 0) + np.sum(targets_flat > 0) + 1e-8)
+    intersection = np.sum((preds_flat > 0) & (targets_flat > 0))
+    denom = np.sum(preds_flat > 0) + np.sum(targets_flat > 0)
+    if denom == 0:
+        return 1.0
+    return (2. * intersection) / (denom + 1e-8)
 
-def calculate_anatomy_stats(preds_np):
-    aorta_mask = (preds_np == 1)
-    artery_mask = (preds_np == 2)
-    if not np.any(aorta_mask) or not np.any(artery_mask):
-        return 0.0, "UNKNOWN"
-    ay, ax = center_of_mass(aorta_mask)
-    artery_coords = np.argwhere(artery_mask)
-    distances = np.sqrt(np.sum((artery_coords - [ay, ax])**2, axis=1))
-    min_dist = np.min(distances)
-    label = "🚨 ANOMALOUS" if min_dist > 55 else "✅ NORMAL"
-    return min_dist, label
+def summarize_foreground(preds_np):
+    foreground_pixels = int(np.sum(preds_np > 0))
+    label = "PRESENT" if foreground_pixels > 0 else "ABSENT"
+    return foreground_pixels, label
 
 def get_medical_status(logits, threshold=0.08):
-    probs = F.softmax(logits, dim=1)
-    entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=1)
+    probs = torch.sigmoid(logits)
+    entropy = -(probs * torch.log(probs + 1e-8) + (1 - probs) * torch.log(1 - probs + 1e-8))
     uncertainty_score = torch.mean(entropy).item()
-    status = "FLAG" if uncertainty_score > threshold else "CLEAR"
-    return status, uncertainty_score, entropy.squeeze().cpu().numpy()
+    status = "HIGH_UNCERTAINTY" if uncertainty_score > threshold else "CLEAR"
+    return status, uncertainty_score, entropy.squeeze(0).squeeze(0).cpu().numpy()
 
 def log_to_csv(data):
     file_exists = os.path.isfile(LOG_FILE)
@@ -47,7 +42,7 @@ def log_to_csv(data):
         writer.writerow(data)
 
 def visualize_prediction():
-    model = UNetWithOOD(in_channels=1, out_channels=3).to(DEVICE)
+    model = UNetWithOOD(in_channels=1, out_channels=1).to(DEVICE)
     checkpoint = torch.load(CHECKPOINT_PATH, map_location=DEVICE, weights_only=True)
     model.load_state_dict(checkpoint["state_dict"])
     model.eval()
@@ -60,18 +55,18 @@ def visualize_prediction():
     with torch.no_grad():
         output = model(image_tensor)
         logits = output[0] if isinstance(output, tuple) else output
-        ood_prob = torch.sigmoid(output[1]).item() if isinstance(output, tuple) else 0.0
+        ood_prob = output[1].item() if isinstance(output, tuple) else 0.0
         status, ent_score, uncertainty_map = get_medical_status(logits)
-        preds = torch.argmax(torch.softmax(logits, dim=1), dim=1).squeeze(0).cpu().numpy()
+        preds = (torch.sigmoid(logits) > 0.5).squeeze(0).squeeze(0).cpu().numpy().astype(np.uint8)
         
-        dist, anatomy_label = calculate_anatomy_stats(preds)
+        foreground_pixels, anatomy_label = summarize_foreground(preds)
         dice_val = calculate_dice(preds, mask.cpu().numpy())
 
     # Log results for report
     log_to_csv({
         "Case_Index": idx,
         "Dice_Score": round(dice_val, 4),
-        "Aorta_Distance_px": round(dist, 2),
+        "Aorta_Distance_px": foreground_pixels,
         "Entropy_Score": round(ent_score, 4),
         "OOD_Prob": round(ood_prob, 4),
         "Anatomy_Result": anatomy_label
@@ -79,7 +74,11 @@ def visualize_prediction():
 
     # Plotting (keeping your 4-panel view)
     plt.figure(figsize=(20, 7))
-    plt.suptitle(f"Case {idx} | Dice: {dice_val:.3f} | {anatomy_label}\nOOD: {ood_prob:.3f} | Entropy: {ent_score:.4f}", fontsize=12)
+    plt.suptitle(
+        f"Case {idx} | Dice: {dice_val:.3f} | Foreground: {anatomy_label}\n"
+        f"Status: {status} | Aux OOD head: {ood_prob:.3f} | Entropy: {ent_score:.4f}",
+        fontsize=12,
+    )
     plt.subplot(1, 4, 1); plt.imshow(image.squeeze().cpu().numpy(), cmap="gray"); plt.title("CT"); plt.axis("off")
     plt.subplot(1, 4, 2); plt.imshow(mask.cpu().numpy(), cmap="jet"); plt.title("Truth"); plt.axis("off")
     plt.subplot(1, 4, 3); plt.imshow(preds, cmap="jet"); plt.title("Pred"); plt.axis("off")

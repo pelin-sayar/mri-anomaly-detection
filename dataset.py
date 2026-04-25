@@ -28,7 +28,7 @@ class CoronaryArteryDataset(Dataset):
         
         # Load numpy arrays
         image = np.load(img_path).astype(np.float32)
-        mask = np.load(mask_path).astype(np.uint8)
+        mask = (np.load(mask_path) > 0).astype(np.float32)
         
         # If using albumentations transforms
         if self.transform:
@@ -38,6 +38,7 @@ class CoronaryArteryDataset(Dataset):
 
         # Add channel dimension to image: (H, W) -> (1, H, W)
         # PyTorch expects (Channels, Height, Width)
-        image = np.expand_dims(image, axis=0)
-        
+        image = np.expand_dims(np.ascontiguousarray(image), axis=0)
+        mask = np.ascontiguousarray(mask)
+
         return torch.from_numpy(image), torch.from_numpy(mask)

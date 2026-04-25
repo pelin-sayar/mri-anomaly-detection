@@ -1,82 +1,77 @@
 import os
 import numpy as np
 import torch
-import torch.nn.functional as F
 from model import UNetWithOOD
 from utils import load_checkpoint
-from scipy.ndimage import distance_transform_edt
 
-def softmax_entropy(logits):
-	# logits: (B, C, H, W)
-	probs = F.softmax(logits, dim=1)
-	entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=1)  # (B, H, W)
-	return entropy
+
+def sigmoid_entropy(logits):
+    # logits: (B, 1, H, W)
+    probs = torch.sigmoid(logits)
+    entropy = -(probs * torch.log(probs + 1e-8) + (1 - probs) * torch.log(1 - probs + 1e-8))
+    return entropy.squeeze(1)
+
 
 @torch.no_grad()
 def predict_and_flag(model, image_path, device, threshold=0.5, entropy_thresh=0.5):
-	"""
-	Predict segmentation and flag OOD using SoftMax entropy and OOD head.
-	Args:
-		model: Trained UNetWithOOD
-		image_path: Path to .npy image slice
-		device: torch device
-		threshold: Segmentation threshold
-		entropy_thresh: Entropy threshold for OOD flag
-	Returns:
-		seg_mask: np.ndarray, binary mask
-		ood_flag: bool, True if anomaly detected
-		entropy_map: np.ndarray
-		ood_prob: float, OOD head output
-	"""
-	model.eval()
-	image = np.load(image_path).astype(np.float32)
-	if image.ndim == 2:
-		image = np.expand_dims(image, axis=0)
-	image = (image - image.min()) / (image.max() - image.min() + 1e-8)
-	tensor = torch.from_numpy(image).unsqueeze(0).to(device)
-	seg_logits, ood_prob = model(tensor)
-	seg_mask = torch.argmax(seg_logits, dim=1).cpu().numpy().astype(np.uint8)[0]
-	entropy_map = softmax_entropy(seg_logits).cpu().numpy()[0]
-	ood_flag = (ood_prob.item() > 0.5) or (entropy_map.mean() > entropy_thresh)
-	return seg_mask, ood_flag, entropy_map, ood_prob.item()
+    """
+    Predict a binary segmentation mask and flag high-uncertainty slices.
 
-def calculate_aorta_to_artery_distance(seg_mask):
-	"""
-	Calculate minimum distance between aorta and coronary artery regions in the mask.
-	Assumes mask labels: 1=aorta, 2=artery (example, adjust as needed).
-	Returns: float (pixels)
-	"""
-	aorta = (seg_mask == 1)
-	artery = (seg_mask == 2)
-	if not np.any(aorta) or not np.any(artery):
-		return None
-	dist_map = distance_transform_edt(~artery)
-	min_dist = dist_map[aorta].min()
-	return min_dist
+    The model architecture includes an auxiliary OOD head, but it is not trained
+    by the current training loop. This inference path therefore relies on entropy
+    from the segmentation logits as the usable uncertainty signal.
+    """
+    model.eval()
+    image = np.load(image_path).astype(np.float32)
+    if image.ndim == 2:
+        image = np.expand_dims(image, axis=0)
+    image = (image - image.min()) / (image.max() - image.min() + 1e-8)
+    tensor = torch.from_numpy(image).unsqueeze(0).to(device)
+    outputs = model(tensor)
+    seg_logits = outputs[0] if isinstance(outputs, tuple) else outputs
+    aux_ood_prob = outputs[1].item() if isinstance(outputs, tuple) else None
+    seg_probs = torch.sigmoid(seg_logits)
+    seg_mask = (seg_probs > threshold).cpu().numpy().astype(np.uint8)[0, 0]
+    entropy_map = sigmoid_entropy(seg_logits).cpu().numpy()[0]
+    mean_entropy = float(entropy_map.mean())
+    uncertainty_flag = mean_entropy > entropy_thresh
+    return {
+        "seg_mask": seg_mask,
+        "uncertainty_flag": uncertainty_flag,
+        "entropy_map": entropy_map,
+        "mean_entropy": mean_entropy,
+        "aux_ood_prob": aux_ood_prob,
+    }
 
 if __name__ == "__main__":
-	import argparse
-	parser = argparse.ArgumentParser(description="AOCA Inference and OOD Flagging")
-	parser.add_argument('--model', type=str, default="my_checkpoint.pth.tar", help="Path to model checkpoint")
-	parser.add_argument('--image', type=str, required=True, help="Path to .npy image slice")
-	args = parser.parse_args()
+    import argparse
 
-	# Device selection
-	if torch.backends.mps.is_available():
-		device = torch.device("mps")
-	elif torch.cuda.is_available():
-		device = torch.device("cuda")
-	else:
-		device = torch.device("cpu")
+    parser = argparse.ArgumentParser(description="AOCA Inference and Uncertainty Flagging")
+    parser.add_argument("--model", type=str, default="aoca_model_synced.pth.tar", help="Path to model checkpoint")
+    parser.add_argument("--image", type=str, required=True, help="Path to .npy image slice")
+    parser.add_argument("--threshold", type=float, default=0.5, help="Segmentation probability threshold")
+    parser.add_argument("--entropy-thresh", type=float, default=0.5, help="Mean entropy threshold for uncertainty flagging")
+    args = parser.parse_args()
 
-	model = UNetWithOOD(in_channels=1, out_channels=3).to(device)
-	load_checkpoint(torch.load(args.model, map_location=device), model)
+    if torch.backends.mps.is_available():
+        device = torch.device("mps")
+    elif torch.cuda.is_available():
+        device = torch.device("cuda")
+    else:
+        device = torch.device("cpu")
 
-	seg_mask, ood_flag, entropy_map, ood_prob = predict_and_flag(model, args.image, device)
-	print(f"OOD Flag: {ood_flag} (OOD head prob: {ood_prob:.3f})")
-	print(f"Segmentation mask shape: {seg_mask.shape}")
-	print(f"Entropy mean: {entropy_map.mean():.3f}")
-	dist = calculate_aorta_to_artery_distance(seg_mask)
-	pixel_spacing = 0.5 # Example value from ImageCAS metadata
-	if dist is not None:
-		print(f"Aorta-to-artery min distance: {dist * pixel_spacing:.2f} mm")
+    model = UNetWithOOD(in_channels=1, out_channels=1).to(device)
+    load_checkpoint(torch.load(args.model, map_location=device, weights_only=True), model)
+
+    result = predict_and_flag(
+        model,
+        args.image,
+        device,
+        threshold=args.threshold,
+        entropy_thresh=args.entropy_thresh,
+    )
+    print(f"Uncertainty Flag: {result['uncertainty_flag']}")
+    print(f"Segmentation mask shape: {result['seg_mask'].shape}")
+    print(f"Entropy mean: {result['mean_entropy']:.3f}")
+    if result["aux_ood_prob"] is not None:
+        print(f"Aux OOD head output (not supervised): {result['aux_ood_prob']:.3f}")

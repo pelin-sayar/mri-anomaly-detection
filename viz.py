@@ -33,7 +33,7 @@ def generate_3d_mesh(volume_path, threshold=0.5, alpha=0.7, color='cyan'):
     plt.show()
 
 
-def show_cam_heatmap(model, image, target_layer, device, save_path=None):
+def show_cam_heatmap(model, image, target_layer, device, class_index=0, save_path=None):
     """
     Visualizes which pixels influenced the 'Artery' prediction the most.
     """
@@ -60,10 +60,11 @@ def show_cam_heatmap(model, image, target_layer, device, save_path=None):
 
     # Forward pass
     seg_out, _ = model(tensor)
-    
-    # FOCUS: We want the CAM for Class 2 (Coronary Artery)
-    # seg_out shape: (Batch, Classes, H, W) -> (1, 3, H, W)
-    class_score = seg_out[0, 2, :, :].mean() 
+
+    if class_index >= seg_out.shape[1]:
+        raise ValueError(f"class_index={class_index} is out of range for output with {seg_out.shape[1]} channel(s)")
+
+    class_score = seg_out[0, class_index, :, :].mean()
     
     model.zero_grad()
     class_score.backward()
@@ -90,7 +91,7 @@ def show_cam_heatmap(model, image, target_layer, device, save_path=None):
     plt.subplot(1, 2, 2)
     plt.imshow(image[0], cmap='gray')
     plt.imshow(cam, cmap='jet', alpha=0.5)
-    plt.title('Grad-CAM (Artery Focus)')
+    plt.title('Grad-CAM')
     
     if save_path:
         plt.savefig(save_path)

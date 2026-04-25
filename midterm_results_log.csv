@@ -1,0 +1,3 @@
+Case_Index,Dice_Score,Aorta_Distance_px,Entropy_Score,OOD_Prob,Anatomy_Result
+276,0.7137,0.0,0.0267,0.6096,UNKNOWN
+304,0.8781,0.0,0.0266,0.6102,UNKNOWN
