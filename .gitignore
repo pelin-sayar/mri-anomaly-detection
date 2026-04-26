@@ -13,3 +13,12 @@ __pycache__/
 .ipynb_checkpoints/
 .venv/
 .DS_Store
+
+# Environments
+venv/
+env/
+cardiac_env/
+.venv/
+
+# Local configuration
+.env
